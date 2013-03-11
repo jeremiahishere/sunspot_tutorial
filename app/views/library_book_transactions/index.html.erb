@@ -1,0 +1,29 @@
+<h1>Listing library_book_transactions</h1>
+
+<table>
+  <tr>
+    <th>Library book</th>
+    <th>User</th>
+    <th>Checkout at</th>
+    <th>Checkin at</th>
+    <th></th>
+    <th></th>
+    <th></th>
+  </tr>
+
+<% @library_book_transactions.each do |library_book_transaction| %>
+  <tr>
+    <td><%= library_book_transaction.library_book_id %></td>
+    <td><%= library_book_transaction.user_id %></td>
+    <td><%= library_book_transaction.checkout_at %></td>
+    <td><%= library_book_transaction.checkin_at %></td>
+    <td><%= link_to 'Show', library_book_transaction %></td>
+    <td><%= link_to 'Edit', edit_library_book_transaction_path(library_book_transaction) %></td>
+    <td><%= link_to 'Destroy', library_book_transaction, method: :delete, data: { confirm: 'Are you sure?' } %></td>
+  </tr>
+<% end %>
+</table>
+
+<br />
+
+<%= link_to 'New Library book transaction', new_library_book_transaction_path %>

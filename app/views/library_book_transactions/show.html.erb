@@ -1,0 +1,25 @@
+<p id="notice"><%= notice %></p>
+
+<p>
+  <b>Library book:</b>
+  <%= @library_book_transaction.library_book_id %>
+</p>
+
+<p>
+  <b>User:</b>
+  <%= @library_book_transaction.user_id %>
+</p>
+
+<p>
+  <b>Checkout at:</b>
+  <%= @library_book_transaction.checkout_at %>
+</p>
+
+<p>
+  <b>Checkin at:</b>
+  <%= @library_book_transaction.checkin_at %>
+</p>
+
+
+<%= link_to 'Edit', edit_library_book_transaction_path(@library_book_transaction) %> |
+<%= link_to 'Back', library_book_transactions_path %>

@@ -1,5 +1,6 @@
 rerun.txt
 *.sql
+*.sqlite3
 tmp/**/*
 log/*.log*
 log/*.lck
