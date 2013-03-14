@@ -1,261 +1,380 @@
-== Welcome to Rails
+= Introduction
+This is a basic setup guide for solr 1.3, sunspot 1.3.3.  I am not an expert.  This is what worked for my project.
 
-Rails is a web-application framework that includes everything needed to create
-database-backed web applications according to the Model-View-Control pattern.
+= Installation
 
-This pattern splits the view (also called the presentation) into "dumb"
-templates that are primarily responsible for inserting pre-built data in between
-HTML tags. The model contains the "smart" domain objects (such as Account,
-Product, Person, Post) that holds all the business logic and knows how to
-persist themselves to a database. The controller handles the incoming requests
-(such as Save New Account, Update Product, Show Post) by manipulating the model
-and directing data to the view.
+Clone the repo:
+  git clone git@github.com:jeremiahishere/sunspot_tutorial.git
+  git checkout -t start_tutorial
 
-In Rails, the model is handled by what's called an object-relational mapping
-layer entitled Active Record. This layer allows you to present the data from
-database rows as objects and embellish these data objects with business logic
-methods. You can read more about Active Record in
-link:files/vendor/rails/activerecord/README.html.
+Install java and sqlite3 if necessary:
 
-The controller and view are handled by the Action Pack, which handles both
-layers by its two parts: Action View and Action Controller. These two layers
-are bundled in a single package due to their heavy interdependence. This is
-unlike the relationship between the Active Record and Action Pack that is much
-more separate. Each of these packages can be used independently outside of
-Rails. You can read more about Action Pack in
-link:files/vendor/rails/actionpack/README.html.
+  sudo apt-get install sqlite3 libsqlite3-dev2
+  sudo apt-get install java6_something
 
+Add to your gemfile:
 
-== Getting Started
+  gem "sunspot_rails", "~>1.3.3"
+  group :development, :test do
+    gem "sunspot_solr", "~>1.3.3"
+  end
 
-1. At the command prompt, create a new Rails application:
-       <tt>rails new myapp</tt> (where <tt>myapp</tt> is the application name)
+Add to .gitignore:
 
-2. Change directory to <tt>myapp</tt> and start the web server:
-       <tt>cd myapp; rails server</tt> (run with --help for options)
+  /solr/pids
+  /solr/data
 
-3. Go to http://localhost:3000/ and you'll see:
-       "Welcome aboard: You're riding Ruby on Rails!"
+Run commands:
+  
+  bundle install
+  rails generate sunspot_rails:install
+  bundle exec rake sunspot:solr:start sunspot:solr:stop
 
-4. Follow the guidelines to start developing your application. You can find
-the following resources handy:
+Starting and stopping the solr server will populate the solr folder and config files.
 
-* The Getting Started Guide: http://guides.rubyonrails.org/getting_started.html
-* Ruby on Rails Tutorial Book: http://www.railstutorial.org/
+= Things that are generated
 
+== config/sunspot.yml
 
-== Debugging Rails
+Several blocks of yaml that look roughly like this:
 
-Sometimes your application goes wrong. Fortunately there are a lot of tools that
-will help you debug it and get it back on the rails.
+  development:
+    disabled: false
+    solr:
+      hostname: localhost
+      port: 8982
+      log_level: INFO
+      auto_commit_after_request: false
 
-First area to check is the application log files. Have "tail -f" commands
-running on the server.log and development.log. Rails will automatically display
-debugging and runtime information to these files. Debugging info will also be
-shown in the browser on requests from 127.0.0.1.
+Add 'disabled: false' to remind people how to disable indexes in the future.  
 
-You can also log your own messages directly into the log file from your code
-using the Ruby logger class from inside your controllers. Example:
+Add 'auto_commit_after_request: false' so that the rails server does not automatically commit to the solr index after updating a model.  You will have to manually index or reindex in development after database updates.
 
-  class WeblogController < ActionController::Base
-    def destroy
-      @weblog = Weblog.find(params[:id])
-      @weblog.destroy
-      logger.info("#{Time.now} Destroyed Weblog ID ##{@weblog.id}!")
+An admin for the development solr index should be available at http://localhost/solr.  If using vagrant, the url option may need to be set based on your ip address and hosts file.
+
+  url: 33.33.33.99/solr
+  or
+  url: dev.project.com/solr
+
+Be very careful with spaces vs tabs in this file.  Vim has the tendency to mix them.  The yaml parser will not be able to read the file if they are mixed.
+
+== solr/conf
+
+Edit solr/conf/solrconfig.xml and uncomment the autoCommit section:
+
+  <autoCommit> 
+    <maxDocs>10000</maxDocs>
+    <maxTime>1000</maxTime> 
+  </autoCommit>
+
+This will set solr to commit after a commit has been alive for 1000 seconds (or maybe microseconds) or if there are 10000 documents to commit.  Commits should not be tied to model updates because you do not want them to delay page loads.  I am not entirely sure how to tweak these numbers to decrease server load.
+
+= Sunspot mixin setup
+
+The sunspot gem has the best documentation for this.  Generally want to use consistent names to help with ordering search results later.
+
+  class LibraryBookTransaction
+    searchable do
+      text :name
+      text :word_cloud
+      text :status do
+        checked_out? ? "Returned" : "Checked Out"
+      end
+      time :checkout_at
+    end
+
+= Perform a basic search
+
+Save the LibraryBookTransaction changes and start the development solr server
+
+  bundle exec rake sunspot:solr:start
+
+Create several LibraryBookTransaction instances in the console.  Then index the changes on solr
+
+  bundle exec rake sunspot:reindex
+
+Open up the rails console and run the following search:
+
+  search = LibraryBookTransaction.solr_search { fulltext "Returned" }
+  search.results
+
+The results should include all of the checked out transactions.
+
+= Sunspot search setup
+
+== View setup
+
+Setup a search form and search results page.
+
+search_form.haml
+
+  = form_tag(search_results_path, :method => :get, :id => 'search') do
+    = text_field_tag(:solr, params[:solr], :placeholder => "Search", :id => 'search_box')
+    = submit_tag('Search', :id => 'search_button')
+
+search_results.haml
+
+  #solr_search
+    = paginate @solr_results.hits
+    .results_box
+      .header Results
+      .body
+        - if @solr_results.results.any?
+          - @solr_results.results.each do |r| 
+            %li= render :partial => "search_result", :object => r, :as => :item
+        - else
+          #solr_item
+            .body
+              %h3 No results matched the search terms.
+
+== Controller setup
+
+  def search_results
+    searchable_models = [Library, Book, User]
+
+    @solr_results = Sunspot.search searchable_models do
+      fulltext params[:solr] do
+        boost_fields :name => 2.0
+      end
+      paginate :page => params[:page], :per_page => Kaminari.config.default_per_page
     end
   end
 
-The result will be a message in your log file along the lines of:
+Individual models can be searched by calling Library.search { args }.  Use Library.solr_search { args| If the search method is already in use by another gem.
 
-  Mon Oct 08 14:22:29 +1000 2007 Destroyed Weblog ID #1!
+= Cucumber setup
 
-More information on how to use the logger is at http://www.ruby-doc.org/core/
+Update the config/sunspot.yml file to enable the testing index
+ 
+  test:
+    disabled: false
+    solr:
+      hostname: localhost
+      port: 8981
+      log_level: WARNING
 
-Also, Ruby documentation can be found at http://www.ruby-lang.org/. There are
-several books available online as well:
+Update the cucumber task to start and stop the server.  Note that this task also has the selenium/javascript setup and teardown.
 
-* Programming Ruby: http://www.ruby-doc.org/docs/ProgrammingRuby/ (Pickaxe)
-* Learn to Program: http://pine.fm/LearnToProgram/ (a beginners guide)
+  task :cucumber => ['sunspot:solr:start', 'cucumber:setup_selenium', 'cucumber:ok', 'cucumber:shutdown_selenium', 'sunspot:solr:stop']
 
-These two books will bring you up to speed on the Ruby language and also on
-programming in general.
+When calling cucumber with rake, make sure to set the environment
+  
+  RAILS_ENV=test bundle exec rake cucumber
 
+Add a cucumber step to reindex the solr server
 
-== Debugger
-
-Debugger support is available through the debugger command when you start your
-Mongrel or WEBrick server with --debugger. This means that you can break out of
-execution at any point in the code, investigate and change the model, and then,
-resume execution! You need to install ruby-debug to run the server in debugging
-mode. With gems, use <tt>sudo gem install ruby-debug</tt>. Example:
-
-  class WeblogController < ActionController::Base
-    def index
-      @posts = Post.all
-      debugger
-    end
+  Given(/^I reindex the solr index$/) do
+    Sunspot.searchable.each(&:solr_reindex)
   end
 
-So the controller will accept the action, run the first line, then present you
-with a IRB prompt in the server window. Here you can do things like:
+= Word cloud setup
 
-  >> @posts.inspect
-  => "[#<Post:0x14a6be8
-          @attributes={"title"=>nil, "body"=>nil, "id"=>"1"}>,
-       #<Post:0x14a6620
-          @attributes={"title"=>"Rails", "body"=>"Only ten..", "id"=>"2"}>]"
-  >> @posts.first.title = "hello from a debugger"
-  => "hello from a debugger"
+This gem simplifies the sunspot mixin by creating a word cloud of database fields and associations.
 
-...and even better, you can examine how your runtime objects actually work:
+Add the gem to Gemfile.
+  
+  gem "acts_as_word_cloud"
 
-  >> f = @posts.first
-  => #<Post:0x13630c4 @attributes={"title"=>nil, "body"=>nil, "id"=>"1"}>
-  >> f.
-  Display all 152 possibilities? (y or n)
+Install
 
-Finally, when you're ready to resume execution, you can enter "cont".
+  bundle install
+  rails generate acts_as_word_cloud:install
+
+Look at the config file located in config/initializers/acts_as_word_cloud.rb
+
+Add the mixin to a model
+
+  class Library
+    acts_as_word_cloud
+
+  class Book
+    acts_as_word_cloud :included_methods => [:full_name], :depth => 3
+
+Call the method
+
+  Library.first.word_cloud
+  Book.first.word_cloud
+
+Add the method to the searchable block
+
+  class Library
+    acts_as_word_cloud
+
+    searchable do
+      text :name
+      text :word_cloud
+    end
+
+= Custom search
+
+Custom search fields can be used to make certain fields match more or fewer search results.  
+
+== Creating a custom search field
+
+Create a field type inside of the types tag. The analyzer tags determine which filters are used for the indexing of records and querying of records.  Each analyzer should have one tokenizer and any number of filters.
+
+  <types>
+    ...
+    <fieldType class="solr.TextField" name="text_with_phonetic_match" positionIncrementGap="100">
+      <analyzer type='index'>
+        <tokenizer class="solr.WhitespaceTokenizerFactory"/>
+        <filter class="solr.StandardFilterFactory"/>
+        <filter class="solr.LowerCaseFilterFactory"/>
+        <filter class="solr.PhoneticFilterFactory" encoder="DoubleMetaphone" inject="true"/>
+      </analyzer>
+      <analyzer type='query'>
+        <tokenizer class="solr.WhitespaceTokenizerFactory"/>
+        <filter class="solr.StandardFilterFactory"/>
+        <filter class="solr.LowerCaseFilterFactory"/>
+        <filter class="solr.PhoneticFilterFactory" encoder="DoubleMetaphone" inject="true"/>
+      </analyzer>
+    </fieldType>
+  </types>
 
 
-== Console
+Create a dynamic field inside of the fields tag. This adds new searchable types to the sunspot mixin.  It should reference a fieldtype in the type attribute.  Be careful with naming conventions because name ending characters are meaningful.
 
-The console is a Ruby shell, which allows you to interact with your
-application's domain model. Here you'll have all parts of the application
-configured, just like it is when the application is running. You can inspect
-domain models, change values, and save to the database. Starting the script
-without arguments will launch it in the development environment.
-
-To start the console, run <tt>rails console</tt> from the application
-directory.
-
-Options:
-
-* Passing the <tt>-s, --sandbox</tt> argument will rollback any modifications
-  made to the database.
-* Passing an environment name as an argument will load the corresponding
-  environment. Example: <tt>rails console production</tt>.
-
-To reload your controllers and models after launching the console run
-<tt>reload!</tt>
-
-More information about irb can be found at:
-link:http://www.rubycentral.org/pickaxe/irb.html
+  <fields>
+    ...
+    <dynamicField name="*_text_with_phonetic_match" stored="false" type="text_with_partial_match" multiValued="true" indexed="true"/>
+  </fields>
 
 
-== dbconsole
+Apply the new field to the searchable block on a model
 
-You can go to the command line of your database directly through <tt>rails
-dbconsole</tt>. You would be connected to the database with the credentials
-defined in database.yml. Starting the script without arguments will connect you
-to the development database. Passing an argument will connect you to a different
-database, like <tt>rails dbconsole production</tt>. Currently works for MySQL,
-PostgreSQL and SQLite 3.
+  class Library < ActiveRecord::Base
+    searchable do
+      text :name, :as => :name_text_with_phonetic_match
+      ...
 
-== Description of Contents
+== Tokenizers
+==== solr.KeywordTokenizerFactory
+- don't tokenize the input at all
+==== solr.LetterTokenizerFactory
+- tokenize on non alphanumeric characters
+==== solr.WhitespaceTokenizerFactory
+- tokenize on whitespace
+==== solr.StandardTokenizerFactory
+- more complex tokenizing that strips extra characters and categorize the search terms
+==== solr.PatternTokenizerFactory
+- set a regular expression to tokenize the search terms
 
-The default directory structure of a generated Ruby on Rails application:
+See more at: http://wiki.apache.org/solr/AnalyzersTokenizersTokenFilters#TokenizerFactories
 
-  |-- app
-  |   |-- assets
-  |       |-- images
-  |       |-- javascripts
-  |       `-- stylesheets
-  |   |-- controllers
-  |   |-- helpers
-  |   |-- mailers
-  |   |-- models
-  |   `-- views
-  |       `-- layouts
-  |-- config
-  |   |-- environments
-  |   |-- initializers
-  |   `-- locales
-  |-- db
-  |-- doc
-  |-- lib
-  |   `-- tasks
-  |-- log
-  |-- public
-  |-- script
-  |-- test
-  |   |-- fixtures
-  |   |-- functional
-  |   |-- integration
-  |   |-- performance
-  |   `-- unit
-  |-- tmp
-  |   |-- cache
-  |   |-- pids
-  |   |-- sessions
-  |   `-- sockets
-  `-- vendor
-      |-- assets
-          `-- stylesheets
-      `-- plugins
+== Filters
+==== solr.StandardFilterFactory
+- no clue, seems important 
+==== solr.LowerCaseFilterFactory
+- converts all indexed words and search terms to lower case
+==== solr.StopFilterFactory
+- applies a stopwords file to the search terms to remove common words
+==== solr.SynonymFilterFactory
+- similar to the stop filter except that it allows extra matches for synonym pairs
+==== solr.PhoneticFilterFactory
+- finds similar phonetic spellings of words when indexing
+- can work as a misspelled word finder for words with close pronunciation to the search term
+==== solr.PorterStemFilterFactory
+- normalizes search terms by standardizing pluralization, verb form, and part of speech
+- uses the same parser as the phonetic filter but does different things with it
+==== solr.EdgeNGramFilterFactory
+- match search terms to the beginnings or ends of words in the index
+- good for autocomplete searches
+==== solr.NGramFilterFactory
+- same as the EdgeNgram filter except that it matches partial words on the inside of the indexed words
+- requires a tokenizer that is not the standard tokenizer to work.  Recommend whitespace.
 
-app
-  Holds all the code that's specific to this particular application.
+See more at: http://wiki.apache.org/solr/AnalyzersTokenizersTokenFilters#TokenFilterFactories
 
-app/assets
-  Contains subdirectories for images, stylesheets, and JavaScript files.
+== Full substring search
+Reasonably general search that matches many misspellings and partial words.  It uses a whitespace tokenizer and an Ngram filter to match partial words as short as two characters.  It will match inner characters of the search term to inner characters of words in the search index.
 
-app/controllers
-  Holds controllers that should be named like weblogs_controller.rb for
-  automated URL mapping. All controllers should descend from
-  ApplicationController which itself descends from ActionController::Base.
+  <fieldType class="solr.TextField" name="text_with_partial_match" positionIncrementGap="100">
+    <analyzer type='index'>
+      <tokenizer class="solr.WhitespaceTokenizerFactory"/>
+      <filter class="solr.StandardFilterFactory"/>
+      <filter class="solr.LowerCaseFilterFactory"/>
+      <filter class="solr.PorterStemFilterFactory"/>
+      <filter class="solr.PhoneticFilterFactory" encoder="DoubleMetaphone" inject="true"/>
+      <filter class="solr.NGramFilterFactory" minGramSize="2" maxGramSize="10"/>
+    </analyzer>
+    <analyzer type='query'>
+      <tokenizer class="solr.WhitespaceTokenizerFactory"/>
+      <filter class="solr.StandardFilterFactory"/>
+      <filter class="solr.LowerCaseFilterFactory"/>
+      <filter class="solr.PorterStemFilterFactory"/>
+      <filter class="solr.PhoneticFilterFactory" encoder="DoubleMetaphone" inject="true"/>
+    </analyzer>
+  </fieldType
 
-app/models
-  Holds models that should be named like post.rb. Models descend from
-  ActiveRecord::Base by default.
+== Autocomplete search
+Matches search terms to the beginning of words in the search index.  Specifically useful for an ajax autocomplete on a text field.  It responds quickly without stressing the database.
 
-app/views
-  Holds the template files for the view that should be named like
-  weblogs/index.html.erb for the WeblogsController#index action. All views use
-  eRuby syntax by default.
+  <analyzer type='index'>
+    <tokenizer class="solr.StandardTokenizerFactory"/>
+    <filter class="solr.StandardFilterFactory"/>
+    <filter class="solr.LowerCaseFilterFactory"/>
+    <filter class="solr.EdgeNGramFilterFactory" minGramSize="1" maxGramSize="100" side="front" />
+  </analyzer>
+  <analyzer type='query'>
+    <tokenizer class="solr.StandardTokenizerFactory"/>
+    <filter class="solr.StandardFilterFactory"/>
+    <filter class="solr.LowerCaseFilterFactory"/>
+    <filter class="solr.EdgeNGramFilterFactory" minGramSize="1" maxGramSize="100" side="front" />
+  </analyzer>
 
-app/views/layouts
-  Holds the template files for layouts to be used with views. This models the
-  common header/footer method of wrapping views. In your views, define a layout
-  using the <tt>layout :default</tt> and create a file named default.html.erb.
-  Inside default.html.erb, call <% yield %> to render the view using this
-  layout.
+= Websolr setup
 
-app/helpers
-  Holds view helpers that should be named like weblogs_helper.rb. These are
-  generated for you automatically when using generators for controllers.
-  Helpers can be used to wrap functionality for your views into methods.
+Setting up an index for a production environment with websolr rquires several steps.
 
-config
-  Configuration files for the Rails environment, the routing map, the database,
-  and other dependencies.
+First, create an account with websolr and create an index.  I used all default values.
 
-db
-  Contains the database schema in schema.rb. db/migrate contains all the
-  sequence of Migrations for your schema.
+After creating the index, copy solr/conf/schema.xml to the schema in the advanced options tab on the Websolr admin.  You may also need to upload stop words and synonyms.
 
-doc
-  This directory is where your application documentation will be stored when
-  generated using <tt>rake doc:app</tt>
+Update your config/sunspot.yml file with the Websolr configuration.  It should look like this with a hash replacing <long_hash>.
 
-lib
-  Application specific libraries. Basically, any kind of custom code that
-  doesn't belong under controllers, models, or helpers. This directory is in
-  the load path.
+  production:
+    disabled: false
+    solr:
+      hostname: index.websolr.com
+      path: /solr/<long_hash>
+      port: 80
+      log_level: WARNING
+      auto_commit_after_request: false
 
-public
-  The directory available for the web server. Also contains the dispatchers and the
-  default HTML files. This should be set as the DOCUMENT_ROOT of your web
-  server.
+Run on a production server
 
-script
-  Helper scripts for automation and generation.
+  RAILS_ENV=production bundle exec rake sunspot:reindex
 
-test
-  Unit and functional tests along with fixtures. When using the rails generate
-  command, template test files will be generated for you and placed in this
-  directory.
+= Indexing with delayed jobs
 
-vendor
-  External libraries that the application depends on. Also includes the plugins
-  subdirectory. If the app has frozen rails, those gems also go here, under
-  vendor/rails/. This directory is in the load path.
+I copied this solution and put it into a mixin: http://blog.bigbinary.com/2012/10/11/solr-sunspot-websolr-delayed-job.html
+
+  module DelayedSunspotIndexing
+    def self.included(base)
+      base.extend ClassMethods
+    end 
+
+    module ClassMethods
+      def delay_sunspot_indexing
+
+        # delaying solr indexing
+        handle_asynchronously :solr_index, queue: 'indexing', priority: 50
+        handle_asynchronously :solr_index!, queue: 'indexing', priority: 50
+
+        include DelayedSunspotIndexing::InstanceMethods
+        alias_method_chain :remove_from_index, :delayed
+      end 
+    end 
+
+    module InstanceMethods
+      def remove_from_index_with_delayed
+        Delayed::Job.enqueue(::RemoveIndexJob.new(record_class: self.class.to_s, attributes: self.attributes), queue: 'indexing', priority: 50) 
+      end 
+    end 
+  end
+
+= Other interesting sunspot features
+
+- Use with to limit search results
+- Order the search results
+- Use search.each_hit_with_result do |hit, result| to view both hit and result objects.  This will let you access the score of the hit in the display

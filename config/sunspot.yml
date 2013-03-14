@@ -1,0 +1,19 @@
+production:
+  solr:
+    hostname: localhost
+    port: 8983
+    log_level: WARNING
+
+development:
+  disabled: false
+  solr:
+    hostname: localhost
+    port: 8982
+    log_level: INFO
+    auto_commit_after_request: false
+
+test:
+  solr:
+    hostname: localhost
+    port: 8981
+    log_level: WARNING
