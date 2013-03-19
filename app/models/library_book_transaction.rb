@@ -7,4 +7,8 @@ class LibraryBookTransaction < ActiveRecord::Base
   def checked_out?
     checkin_at.nil?
   end
+
+  def name
+    "#{library_book.name} checked out by #{user.name}"
+  end
 end

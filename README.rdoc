@@ -76,7 +76,6 @@ The sunspot gem has the best documentation for this.  Generally want to use cons
   class LibraryBookTransaction
     searchable do
       text :name
-      text :word_cloud
       text :status do
         checked_out? ? "Returned" : "Checked Out"
       end
