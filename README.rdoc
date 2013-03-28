@@ -5,11 +5,11 @@ This is a basic setup guide for solr 1.3, sunspot 1.3.3.  I am not an expert.  T
 
 Clone the repo:
   git clone git@github.com:jeremiahishere/sunspot_tutorial.git
-  git checkout -t start_tutorial
+  git checkout -b start_tutorial
 
 Install java and sqlite3 if necessary:
 
-  sudo apt-get install sqlite3 libsqlite3-dev2
+  sudo apt-get install libxml2-dev libxslt1-dev sqlite3 libsqlite3-dev2
   sudo apt-get install java6_something
 
 Add to your gemfile:
@@ -52,9 +52,11 @@ Add 'auto_commit_after_request: false' so that the rails server does not automat
 
 An admin for the development solr index should be available at http://localhost/solr.  If using vagrant, the url option may need to be set based on your ip address and hosts file.
 
-  url: 33.33.33.99/solr
-  or
-  url: dev.project.com/solr
+  solr:
+    ...
+    url: 33.33.33.99:8982/solr
+    or
+    url: dev.project.com:8982/solr
 
 Be very careful with spaces vs tabs in this file.  Vim has the tendency to mix them.  The yaml parser will not be able to read the file if they are mixed.
 
@@ -82,6 +84,8 @@ The sunspot gem has the best documentation for this.  Generally want to use cons
       time :checkout_at
     end
 
+Add searchable mixins to the Library, Book, and User models.
+
 = Perform a basic search
 
 Save the LibraryBookTransaction changes and start the development solr server
@@ -99,8 +103,29 @@ Open up the rails console and run the following search:
 
 The results should include all of the checked out transactions.
 
+Searching multiple models can be done by using the sunspot search method
+
+  search = Sunspot.search([Library, Book]) { fulltext "Gatsby" }
+
+The search results in this case will be an array of libraries and books.  Sunspot populates the results array by reading the search.hits array, constantizing the model name and finding the records by id.
+
 = Sunspot search setup
 
+Setup a controller, routes and views folder.  There will be two views for the search form and search results.
+
+== Controller setup
+
+  def search_results
+    searchable_models = [Library, Book, User]
+
+    @solr_results = Sunspot.search searchable_models do
+      fulltext params[:solr] do
+        boost_fields :name => 2.0
+      end
+      paginate :page => params[:page], :per_page => Kaminari.config.default_per_page
+    end
+  end
+  
 == View setup
 
 Setup a search form and search results page.
@@ -120,26 +145,12 @@ search_results.haml
       .body
         - if @solr_results.results.any?
           - @solr_results.results.each do |r| 
-            %li= render :partial => "search_result", :object => r, :as => :item
+            %li
+              -# render mixed search result information
         - else
           #solr_item
             .body
               %h3 No results matched the search terms.
-
-== Controller setup
-
-  def search_results
-    searchable_models = [Library, Book, User]
-
-    @solr_results = Sunspot.search searchable_models do
-      fulltext params[:solr] do
-        boost_fields :name => 2.0
-      end
-      paginate :page => params[:page], :per_page => Kaminari.config.default_per_page
-    end
-  end
-
-Individual models can be searched by calling Library.search { args }.  Use Library.solr_search { args| If the search method is already in use by another gem.
 
 = Cucumber setup
 
@@ -208,6 +219,8 @@ Add the method to the searchable block
 
 Custom search fields can be used to make certain fields match more or fewer search results.  
 
+When updating any of the solr and sunspot config files, make sure that the sunspot server has been completely shutdown using `ps -ef | grep solr`
+
 == Creating a custom search field
 
 Create a field type inside of the types tag. The analyzer tags determine which filters are used for the indexing of records and querying of records.  Each analyzer should have one tokenizer and any number of filters.
@@ -235,7 +248,7 @@ Create a dynamic field inside of the fields tag. This adds new searchable types 
 
   <fields>
     ...
-    <dynamicField name="*_text_with_phonetic_match" stored="false" type="text_with_partial_match" multiValued="true" indexed="true"/>
+    <dynamicField name="*_text_with_phonetic_match" stored="false" type="text_with_phonetic_match" multiValued="true" indexed="true"/>
   </fields>
 
 
@@ -247,6 +260,9 @@ Apply the new field to the searchable block on a model
       ...
 
 == Tokenizers
+
+Each field type should have one tokenizer that determines how the words being queried or indexed are split.
+
 ==== solr.KeywordTokenizerFactory
 - don't tokenize the input at all
 ==== solr.LetterTokenizerFactory
@@ -261,6 +277,8 @@ Apply the new field to the searchable block on a model
 See more at: http://wiki.apache.org/solr/AnalyzersTokenizersTokenFilters#TokenizerFactories
 
 == Filters
+
+After the tokenizer runs, additional changes can be made to the words to make search queries return different results.
 ==== solr.StandardFilterFactory
 - no clue, seems important 
 ==== solr.LowerCaseFilterFactory
@@ -303,7 +321,7 @@ Reasonably general search that matches many misspellings and partial words.  It 
       <filter class="solr.PorterStemFilterFactory"/>
       <filter class="solr.PhoneticFilterFactory" encoder="DoubleMetaphone" inject="true"/>
     </analyzer>
-  </fieldType
+  </fieldType>
 
 == Autocomplete search
 Matches search terms to the beginning of words in the search index.  Specifically useful for an ajax autocomplete on a text field.  It responds quickly without stressing the database.
